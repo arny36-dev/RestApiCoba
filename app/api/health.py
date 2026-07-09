@@ -1,12 +1,23 @@
-"""Health check endpoint."""
+"""Health endpoints: app liveness and a real database connectivity check."""
+
+from typing import Any
 
 from fastapi import APIRouter
 
-from app.schemas.common import HealthResponse
+from app.db.health import check_database_connection
+from app.db.session import get_engine
 
-router = APIRouter()
+router = APIRouter(tags=["health"])
+db_router = APIRouter(tags=["health"])
 
 
-@router.get("/health", response_model=HealthResponse, tags=["health"])
-async def health() -> HealthResponse:
-    return HealthResponse()
+@router.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@db_router.get("/db/health")
+async def database_health() -> dict[str, Any]:
+    """Open a real connection and run SELECT 1; 503 with a safe message on failure."""
+    await check_database_connection(get_engine())
+    return {"status": "ok", "database": "connected"}

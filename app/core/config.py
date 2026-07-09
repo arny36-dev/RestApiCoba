@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime configuration. DATABASE_URL and ALLOWED_TABLES are required."""
+    """Runtime configuration. DATABASE_URL is required."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -14,22 +14,20 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "Generic CRUD API"
+    app_name: str = "RestApiCoba"
     app_env: str = "local"
     debug: bool = False
 
     database_url: str
-    allowed_tables: str
 
+    default_object_id: int | None = None
     default_page_size: int = 20
     max_page_size: int = 100
 
     api_prefix: str = "/api/v1"
 
-    @property
-    def allowed_tables_list(self) -> list[str]:
-        """ALLOWED_TABLES parsed as an ordered, whitespace-trimmed whitelist."""
-        return [name.strip() for name in self.allowed_tables.split(",") if name.strip()]
+    log_dir: str = "logs"
+    log_sql: bool = False
 
 
 @lru_cache

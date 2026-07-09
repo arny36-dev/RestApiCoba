@@ -1,23 +1,22 @@
-# Generic CRUD API
+# RestApiCoba — Employees API
 
-A production-ready FastAPI backend exposing **generic CRUD operations** over a
-configurable whitelist of database tables. Table and column names are never
-taken from user input directly — every table is validated against the
-`ALLOWED_TABLES` whitelist and every column against reflected SQLAlchemy
-metadata.
+FastAPI backend exposing **explicit employee endpoints** over the legacy
+`pv31` database (MariaDB), replacing the old CakePHP `Employees.ErRegEmployees`
+operations. There are **no dynamic table routes** — every endpoint reads or
+writes fixed, known tables only:
+
+- `er_reg_employees` — read/write (the only writable table)
+- `er_reg_employee_types` — read-only listing
 
 > ⚠️ **DELETE is soft delete only.** No endpoint ever issues a physical
-> `DELETE`. The `DELETE` endpoint sets `active = 0` on the record. Tables
-> without an `active` column cannot be deleted at all (the API returns `400`).
+> `DELETE`. The `DELETE` endpoint sets `active = 0` on the employee.
 
 ## Stack
 
 - Python 3.12+, FastAPI, Uvicorn
-- SQLAlchemy 2.x **async** with **Core** (no ORM models — tables are reflected
-  at runtime)
-- Pydantic v2 + pydantic-settings
-- asyncpg (PostgreSQL)
-- Pytest, Ruff, Alembic (prepared, no migrations generated)
+- SQLAlchemy 2.x **async** with **Core** (tables reflected at runtime)
+- aiomysql (MariaDB/MySQL) / asyncpg (PostgreSQL)
+- Pydantic v2 + pydantic-settings, Pytest, Ruff
 
 ## Installation
 
@@ -33,32 +32,19 @@ pip install -e ".[dev]"
 
 ## Configuration — create `.env`
 
-Copy the example file and adjust it:
-
 ```bash
 cp .env.example .env
 ```
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `DATABASE_URL` | ✅ | Async SQLAlchemy URL, e.g. `postgresql+asyncpg://user:pass@host:5432/db` |
-| `ALLOWED_TABLES` | ✅ | Comma-separated whitelist of tables the API may touch |
+| `DATABASE_URL` | ✅ | Async SQLAlchemy URL. MariaDB/MySQL: `mysql+aiomysql://user:pass@host:3306/db?charset=utf8mb4` |
+| `DEFAULT_OBJECT_ID` | – | Fallback `object_id` used for filtering and creating employees |
 | `DEFAULT_PAGE_SIZE` | – | Default page size for listings (default `20`) |
-| `MAX_PAGE_SIZE` | – | Hard upper bound for `page_size` (default `100`) |
-| `API_PREFIX` | – | URL prefix for the CRUD API (default `/api/v1`) |
+| `MAX_PAGE_SIZE` | – | Hard upper bound for `page_size`; larger values return `422` |
+| `API_PREFIX` | – | URL prefix (default `/api/v1`) |
 | `DEBUG` | – | `true` enables debug logging and error details in 500 responses |
-
-### About `ALLOWED_TABLES`
-
-`ALLOWED_TABLES` is the **security boundary** of this API. Only tables listed
-there can be read or written — any other table name in the URL returns `404`.
-Column names used in filters, sorting, inserts, and updates are additionally
-validated against the table's real reflected schema, so neither table nor
-column identifiers from a request ever reach SQL unchecked.
-
-```env
-ALLOWED_TABLES=er_reg_employees,er_reg_employee_emails,er_reg_employee_bozp_files,er_reg_employee_types
-```
+| `LOG_DIR` | – | Log directory (default `logs`) |
 
 ## Running the app
 
@@ -68,138 +54,87 @@ uvicorn app.main:app --reload
 
 Interactive docs: <http://127.0.0.1:8000/docs>
 
-## Running tests
+At startup the app logs the **safe** DB config (dialect, host, port, database,
+user — never the password).
 
-Tests run against a temporary SQLite database (via `aiosqlite`) — no
-PostgreSQL needed:
+## Running tests / Ruff
 
 ```bash
 pytest
-```
-
-## Running Ruff
-
-```bash
 ruff check .
 ruff format --check .
 ```
 
-## API overview
+Tests run against a temporary SQLite database mirroring the real schema — no
+MariaDB needed.
+
+## Endpoints
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/health` | Health check |
-| `GET` | `/api/v1/tables` | List whitelisted tables |
-| `GET` | `/api/v1/{table}/metadata` | Reflected column metadata |
-| `GET` | `/api/v1/{table}` | List records (filters, pagination, sorting) |
-| `GET` | `/api/v1/{table}/{id}` | Get one record |
-| `POST` | `/api/v1/{table}` | Create a record |
-| `PUT` | `/api/v1/{table}/{id}` | Update provided fields |
-| `PATCH` | `/api/v1/{table}/{id}` | Update provided fields |
-| `DELETE` | `/api/v1/{table}/{id}` | **Soft delete** (`active = 0`) |
+| `GET` | `/health` | App liveness |
+| `GET` | `/api/v1/db/health` | Real DB check (`SELECT 1`); 503 with safe message on failure |
+| `GET` | `/api/v1/employees` | List employees (filters + pagination, always `active = 1`) |
+| `GET` | `/api/v1/employees/{id}` | Employee detail (404 if missing or inactive) |
+| `POST` | `/api/v1/employees` | Create employee |
+| `PUT` | `/api/v1/employees/{id}` | Update editable fields |
+| `PATCH` | `/api/v1/employees/{id}` | Update provided fields |
+| `DELETE` | `/api/v1/employees/{id}` | **Soft delete** (`active = 0`) |
+| `GET` | `/api/v1/employee-types` | Read-only active employee types |
 
-### Listing behavior
+### Listing filters
 
-- `page` (default `1`), `page_size` (default `DEFAULT_PAGE_SIZE`, values above
-  `MAX_PAGE_SIZE` are **clamped** to it), `sort` + `order` (`asc`/`desc`).
-- If the table has an `active` column, only `active = 1` rows are returned
-  unless `include_inactive=true`.
-- Any other query parameter is treated as a filter and must match a real
-  column, otherwise the API returns `422`:
-  - text columns → case-insensitive partial match
-  - integer / numeric / boolean columns → exact match
-  - date / datetime columns → `{field}_from` and `{field}_to` range filters
+`forename`, `surname`, `type`, `rfid`, `ecv`, `note`, `bozp_state` — partial,
+case-insensitive match (like the old CakePHP code). `rfid_gate` and
+`rfid_littlegate` accept `0`, `1`, or `2` (= all, no filter). `object_id`
+defaults to `DEFAULT_OBJECT_ID`. Sort is fixed: `surname ASC, forename ASC`.
 
-### Write behavior
+### Write rules
 
-- Unknown columns are rejected with `422`.
-- Auto-generated primary keys cannot be written; the primary key can never be
-  changed.
-- On create, `active` defaults to `1` and `created` / `created_at` /
-  `modified` / `updated_at` are stamped if those columns exist.
-- On update and soft delete, `modified` / `updated_at` are stamped if present.
-- Only single-column primary keys are supported; composite keys return `400`.
+- `surname` is required on create; unknown fields are rejected with `422`.
+- `id` and `active` can never be written through POST/PUT/PATCH.
+- On create the API sets `active = 1`, `bozp_state = 'NO BOZP'`,
+  `bozp_required = 0` and stamps `created`/`modified`.
+  (Note: the real column is `bozp_state`, an ENUM whose "no training" value is
+  `'NO BOZP'` — there is no `bozp_status` column.)
+- On update and soft delete `modified` is stamped.
 
 ## Example curl requests
 
-List tables:
-
 ```bash
-curl http://127.0.0.1:8000/api/v1/tables
-```
-
-Get metadata:
-
-```bash
-curl http://127.0.0.1:8000/api/v1/er_reg_employees/metadata
-```
-
-List records with filters (partial name match, exact type, date range, paging):
-
-```bash
-curl "http://127.0.0.1:8000/api/v1/er_reg_employees?surname=smith&employee_type_id=2&created_from=2024-01-01&page=1&page_size=20&sort=surname&order=asc"
-```
-
-Create a record:
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/er_reg_employees \
+curl -i "http://127.0.0.1:8000/health"
+curl -i "http://127.0.0.1:8000/api/v1/db/health"
+curl -i "http://127.0.0.1:8000/api/v1/employees?page=1&page_size=5"
+curl -i "http://127.0.0.1:8000/api/v1/employees?surname=smith&rfid_gate=2"
+curl -i "http://127.0.0.1:8000/api/v1/employees/123"
+curl -i -X POST "http://127.0.0.1:8000/api/v1/employees" \
   -H "Content-Type: application/json" \
-  -d '{"forename": "John", "surname": "Smith", "active": 1}'
+  -d '{"forename": "John", "surname": "Smith", "type": "employee", "rfid_gate": 1}'
+curl -i -X PATCH "http://127.0.0.1:8000/api/v1/employees/123" \
+  -H "Content-Type: application/json" -d '{"note": "updated"}'
+curl -i -X DELETE "http://127.0.0.1:8000/api/v1/employees/123"
+curl -i "http://127.0.0.1:8000/api/v1/employee-types"
 ```
 
-PUT update:
+## Logging
 
-```bash
-curl -X PUT http://127.0.0.1:8000/api/v1/er_reg_employees/123 \
-  -H "Content-Type: application/json" \
-  -d '{"forename": "John", "surname": "Smith-Jones"}'
+Logs are written to the console **and** `logs/app.log` (rotating, 10 MB × 5
+backups) in **simple Slovak**, one line per event, saying exactly what
+happened:
+
+```text
+07.07.2026 15:10:02 | INFO | Vytvorený nový zamestnanec ID 351: Smith John
+07.07.2026 15:10:05 | INFO | GET /api/v1/employees?surname=smith → 200 (v poriadku, 38 ms)
+07.07.2026 15:10:09 | POZOR | DELETE /api/v1/employees/999 → 404 (nenájdené) | dôvod: Zamestnanec 999 neexistuje alebo je neaktívny
 ```
 
-PATCH update:
-
-```bash
-curl -X PATCH http://127.0.0.1:8000/api/v1/er_reg_employees/123 \
-  -H "Content-Type: application/json" \
-  -d '{"surname": "Smith-Jones"}'
-```
-
-Soft delete:
-
-```bash
-curl -X DELETE http://127.0.0.1:8000/api/v1/er_reg_employees/123
-```
-
-Response:
-
-```json
-{ "status": "deleted", "id": 123 }
-```
+Technical library noise (SQL statements, driver chatter) is hidden by
+default — set `LOG_SQL=true` in `.env` to log every SQL statement while
+debugging. Unexpected errors log the full traceback to the file; clients never
+see it.
 
 ## Error format
-
-All errors use a consistent shape:
 
 ```json
 { "detail": "Clear error message" }
 ```
-
-Stack traces are never exposed; with `DEBUG=false`, unexpected errors return a
-generic `{"detail": "Internal server error"}`.
-
-## Migrations (Alembic)
-
-Alembic is installed and `alembic.ini` is prepared, but **no migrations are
-generated** — the real schema is owned by the existing database and tables are
-reflected at runtime. When you take ownership of the schema, run
-`alembic init migrations` and wire `migrations/env.py` to read `DATABASE_URL`
-from the environment.
-
-## Limitations / assumptions
-
-- Only single-column primary keys are supported (`400` otherwise).
-- A table literally named `tables` would be shadowed by the `/tables` route.
-- `page_size` above `MAX_PAGE_SIZE` is clamped, not rejected (documented,
-  consistent behavior).
-- Reflected metadata is cached for the process lifetime; restart the app after
-  changing a table's schema.

@@ -15,25 +15,19 @@ class AppError(Exception):
         self.detail = detail
 
 
-class TableNotAllowedError(AppError):
-    """Requested table is not present in the ALLOWED_TABLES whitelist."""
-
-    status_code = 404
-
-
 class RecordNotFoundError(AppError):
-    """No matching record for the given primary key."""
+    """No matching record for the given identifier."""
 
     status_code = 404
-
-
-class BadRequestError(AppError):
-    """Operation is not supported for the target table."""
-
-    status_code = 400
 
 
 class UnprocessableError(AppError):
-    """Request references unknown columns or carries invalid values."""
+    """Request carries invalid values or no usable fields."""
 
     status_code = 422
+
+
+class DatabaseUnavailableError(AppError):
+    """The database cannot be reached."""
+
+    status_code = 503

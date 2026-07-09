@@ -40,9 +40,7 @@ async def get_table(name: str) -> Table:
                     lambda sync_connection: Table(name, _metadata, autoload_with=sync_connection)
                 )
         except NoSuchTableError as exc:
-            raise AppError(
-                f"Table '{name}' is allowed by configuration but does not exist in the database"
-            ) from exc
+            raise AppError(f"Tabuľka '{name}' v databáze neexistuje") from exc
 
         _tables[name] = table
         return table
