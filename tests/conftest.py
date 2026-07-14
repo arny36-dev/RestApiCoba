@@ -13,6 +13,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+# Valid API key used by the default authenticated test client.
+TEST_API_KEY = "test-api-key-1234567890"
+
 SCHEMA = """
 CREATE TABLE er_reg_employees (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,6 +72,7 @@ def client(db_path: Path) -> Iterator[TestClient]:
             "APP_ENV": "test",
             "DEBUG": "false",
             "DATABASE_URL": f"sqlite+aiosqlite:///{db_path.as_posix()}",
+            "API_KEY": TEST_API_KEY,
             "DEFAULT_OBJECT_ID": "127",
             "DEFAULT_PAGE_SIZE": "10",
             "MAX_PAGE_SIZE": "50",
@@ -81,5 +85,19 @@ def client(db_path: Path) -> Iterator[TestClient]:
 
     from app.main import create_app
 
-    with TestClient(create_app()) as test_client:
+    # Default client is authenticated: it sends a valid key on every request so
+    # the existing endpoint tests exercise behaviour, not auth. Tests that check
+    # auth itself build their own unauthenticated client below.
+    with TestClient(create_app(), headers={"X-API-Key": TEST_API_KEY}) as test_client:
         yield test_client
+
+
+@pytest.fixture(scope="session")
+def anon_client(db_path: Path, client: TestClient) -> TestClient:
+    """Client without the API key, for testing 401 responses.
+
+    Depends on ``client`` so the environment and app are already configured.
+    """
+    from app.main import create_app
+
+    return TestClient(create_app())

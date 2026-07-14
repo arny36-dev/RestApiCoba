@@ -1,14 +1,12 @@
 """Biznis pravidlá pre zamestnancov — správanie prevzaté zo starého CakePHP.
 
-- Zoznamy vždy filtrujú ``active = 1`` a radia podľa priezviska a mena.
-- Textové filtre hľadajú čiastočnú zhodu (LIKE %hodnota%).
-- ``rfid_gate`` / ``rfid_littlegate`` filtrujú len pri hodnote 0 alebo 1 (2 = všetko).
-- ``object_id`` sa dopĺňa z DEFAULT_OBJECT_ID v .env.
+- Zoznam vracia VŠETKY aktívne (``active = 1``) záznamy objektu z DEFAULT_OBJECT_ID,
+  bez akýchkoľvek filtrov, zoradené podľa priezviska, mena a id.
+- ``object_id`` sa pri zápise vždy nastaví na DEFAULT_OBJECT_ID.
 - DELETE je len soft delete: nastaví ``active = 0``, záznam ostáva v databáze.
 """
 
 import logging
-import math
 from datetime import UTC, datetime
 from typing import Any
 
@@ -64,21 +62,6 @@ def _now(column: Column[Any]) -> datetime:
     return now.replace(tzinfo=None)
 
 
-def _partial_match(column: Column[Any], raw: str) -> ColumnElement[bool]:
-    pattern = raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return column.ilike(f"%{pattern}%", escape="\\")
-
-
-def _resolve_page_size(page_size: int | None, settings: Settings) -> int:
-    if page_size is None:
-        return settings.default_page_size
-    if page_size > settings.max_page_size:
-        raise UnprocessableError(
-            f"page_size nesmie byť väčšie ako {settings.max_page_size} (zadané {page_size})"
-        )
-    return page_size
-
-
 def _stamp_timestamps(table: Table, values: dict[str, Any], names: tuple[str, ...]) -> None:
     for name in names:
         column = table.columns.get(name)
@@ -86,84 +69,54 @@ def _stamp_timestamps(table: Table, values: dict[str, Any], names: tuple[str, ..
             values[name] = _now(column)
 
 
-def _apply_object_id_default(table: Table, values: dict[str, Any], settings: Settings) -> None:
-    if "object_id" not in table.columns:
+async def _ensure_valid_type(
+    session: AsyncSession, settings: Settings, values: dict[str, Any]
+) -> None:
+    """``type`` musí byť názov existujúceho aktívneho typu z er_reg_employee_types.
+
+    Kontroluje sa iba keď je ``type`` v požiadavke a nie je prázdny. Rozsah je
+    rovnaký ako pri zozname typov: aktívne typy pre nastavený objekt.
+    """
+    type_value = values.get("type")
+    if type_value is None:
         return
-    if values.get("object_id") is None:
+
+    types_table = await repository.employee_types_table()
+    conditions: list[ColumnElement[bool]] = [types_table.c.name == type_value]
+    if "active" in types_table.columns:
+        conditions.append(types_table.c.active == 1)
+    if settings.default_object_id is not None and "object_id" in types_table.columns:
+        conditions.append(types_table.c.object_id == settings.default_object_id)
+
+    if not await repository.employee_type_exists(session, types_table, conditions):
+        raise UnprocessableError(
+            f"Neplatný typ zamestnanca: '{type_value}'. "
+            "Použite niektorý z názvov z GET /api/v1/employee-types."
+        )
+
+
+def _apply_object_id_default(table: Table, values: dict[str, Any], settings: Settings) -> None:
+    # object_id sa neprijíma od klienta (nie je v EmployeeCreate) — vždy sa
+    # nastaví na DEFAULT_OBJECT_ID.
+    if "object_id" in table.columns:
         values["object_id"] = settings.default_object_id
 
 
 async def list_employees(
     session: AsyncSession,
     settings: Settings,
-    *,
-    page: int,
-    page_size: int | None,
-    forename: str | None,
-    surname: str | None,
-    employee_type: str | None,
-    rfid: str | None,
-    rfid_gate: int | None,
-    rfid_littlegate: int | None,
-    ecv: str | None,
-    note: str | None,
-    bozp_state: str | None,
-    object_id: int | None,
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
+) -> list[dict[str, Any]]:
     table = await repository.employees_table()
-    size = _resolve_page_size(page_size, settings)
 
+    # Žiadne filtre, žiadne stránkovanie — iba pevné obmedzenia:
+    # aktívne záznamy pre nastavený objekt.
     conditions: list[ColumnElement[bool]] = [table.c.active == 1]
-    applied_filters: list[str] = []
+    if settings.default_object_id is not None and "object_id" in table.columns:
+        conditions.append(table.c.object_id == settings.default_object_id)
 
-    effective_object_id = object_id if object_id is not None else settings.default_object_id
-    if effective_object_id is not None and "object_id" in table.columns:
-        conditions.append(table.c.object_id == effective_object_id)
-
-    text_values = {
-        "forename": forename,
-        "surname": surname,
-        "type": employee_type,
-        "rfid": rfid,
-        "ecv": ecv,
-        "note": note,
-        "bozp_state": bozp_state,
-    }
-    for name, value in text_values.items():
-        column = table.columns.get(name)
-        if value is not None and column is not None:
-            conditions.append(_partial_match(column, value))
-            applied_filters.append(f"{_sk(name)} obsahuje '{value}'")
-
-    # 2 znamená "všetko" — filtruje sa len 0 alebo 1.
-    if rfid_gate is not None and rfid_gate != 2:
-        conditions.append(table.c.rfid_gate == rfid_gate)
-        applied_filters.append(f"brána = {rfid_gate}")
-    if rfid_littlegate is not None and rfid_littlegate != 2:
-        conditions.append(table.c.rfid_littlegate == rfid_littlegate)
-        applied_filters.append(f"malá brána = {rfid_littlegate}")
-
-    total = await repository.count_employees(session, table, conditions)
-    rows = await repository.list_employees(
-        session, table, conditions, limit=size, offset=(page - 1) * size
-    )
-
-    filters_text = f" | filtre: {', '.join(applied_filters)}" if applied_filters else ""
-    logger.info(
-        "Zoznam zamestnancov: nájdených %d, zobrazená strana %d (%d na stranu)%s",
-        total,
-        page,
-        size,
-        filters_text,
-    )
-
-    pagination = {
-        "page": page,
-        "page_size": size,
-        "total": total,
-        "pages": math.ceil(total / size) if total else 0,
-    }
-    return rows, pagination
+    rows = await repository.list_employees(session, table, conditions)
+    logger.info("Zoznam zamestnancov: vrátených %d (všetky, bez stránkovania)", len(rows))
+    return rows
 
 
 async def get_employee(session: AsyncSession, employee_id: int) -> dict[str, Any]:
@@ -183,6 +136,7 @@ async def create_employee(
     table = await repository.employees_table()
     values: dict[str, Any] = payload.model_dump(exclude_unset=True)
 
+    await _ensure_valid_type(session, settings, values)
     _apply_object_id_default(table, values, settings)
     values["active"] = 1
     if BOZP_STATE_COLUMN in table.columns:
@@ -203,7 +157,7 @@ async def create_employee(
 
 
 async def update_employee(
-    session: AsyncSession, employee_id: int, payload: EmployeeUpdate
+    session: AsyncSession, settings: Settings, employee_id: int, payload: EmployeeUpdate
 ) -> dict[str, Any]:
     """Spoločná implementácia pre PUT aj PATCH: upraví len zadané polia."""
     table = await repository.employees_table()
@@ -211,6 +165,7 @@ async def update_employee(
     if not values:
         raise UnprocessableError("Telo požiadavky musí obsahovať aspoň jedno upraviteľné pole")
 
+    await _ensure_valid_type(session, settings, values)
     changed_fields = [_sk(name) for name in values]
     _stamp_timestamps(table, values, UPDATE_TIMESTAMP_COLUMNS)
 

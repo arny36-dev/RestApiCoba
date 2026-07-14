@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1
+#
+# Development image ONLY. Includes an editor (nano), network tools (ping, curl)
+# and runs Uvicorn with --reload. Never deploy this to production — use the
+# multi-stage Dockerfile for that.
+FROM python:3.11.4-slim
+
+ENV TZ=Europe/Bratislava \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential gcc libmariadb-dev \
+        tzdata nano iputils-ping curl \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Dev deps include pytest, ruff, alembic, aiosqlite, asyncpg (see requirements-dev.txt).
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements-dev.txt
+
+COPY app ./app
+
+EXPOSE 8000
+
+# Auto-reload on code change (code is bind-mounted via docker-compose.dev.yml).
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

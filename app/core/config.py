@@ -20,6 +20,10 @@ class Settings(BaseSettings):
 
     database_url: str
 
+    # API key required in the ``X-API-Key`` header on protected endpoints.
+    # When unset, protected endpoints fail closed (every request gets 401).
+    api_key: str | None = None
+
     default_object_id: int | None = None
     default_page_size: int = 20
     max_page_size: int = 100

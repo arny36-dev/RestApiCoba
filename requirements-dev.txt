@@ -1,0 +1,18 @@
+# Development & test dependencies. Installs the production runtime plus tooling.
+#   pip install --no-cache-dir -r requirements-dev.txt
+# None of these belong in the production image (see .dockerignore / Dockerfile).
+-r requirements.txt
+
+# --- Test suite ---
+pytest==9.1.1
+httpx==0.28.1          # required by starlette.testclient (TestClient)
+aiosqlite==0.22.1      # in-memory/file SQLite driver used by the tests
+
+# --- Linting ---
+ruff==0.15.20
+
+# --- Database migrations (run manually, never inside the app process) ---
+alembic==1.18.5
+
+# --- Optional PostgreSQL support (not used by the MariaDB production target) ---
+asyncpg==0.31.0

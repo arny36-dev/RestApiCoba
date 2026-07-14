@@ -36,6 +36,15 @@ def test_unknown_fields_are_rejected(client: TestClient) -> None:
     assert response.status_code == 422
 
 
+def test_object_id_cannot_be_set_by_client(client: TestClient) -> None:
+    # object_id sa vždy dopĺňa na DEFAULT_OBJECT_ID; klient ho nesmie posielať.
+    assert (
+        client.post("/api/v1/employees", json={"surname": "X", "object_id": 5}).status_code == 422
+    )
+    record = _create(client, surname="ObjectIdDefault")
+    assert record["object_id"] == 127
+
+
 def test_id_and_active_cannot_be_written(client: TestClient) -> None:
     assert client.post("/api/v1/employees", json={"surname": "X", "id": 999}).status_code == 422
     assert client.post("/api/v1/employees", json={"surname": "X", "active": 0}).status_code == 422
@@ -43,6 +52,41 @@ def test_id_and_active_cannot_be_written(client: TestClient) -> None:
     record = _create(client, surname="Immutable")
     assert client.patch(f"/api/v1/employees/{record['id']}", json={"id": 5}).status_code == 422
     assert client.patch(f"/api/v1/employees/{record['id']}", json={"active": 0}).status_code == 422
+
+
+def test_type_must_exist_in_employee_types(client: TestClient) -> None:
+    # 'employee' je aktívny typ pre objekt 127 (viď conftest) -> prejde.
+    record = _create(client, surname="ValidType", type="employee")
+    assert record["type"] == "employee"
+
+    # Neznámy typ -> 422.
+    r = client.post("/api/v1/employees", json={"surname": "X", "type": "neexistuje"})
+    assert r.status_code == 422
+    assert "employee-types" in r.json()["detail"]
+
+    # Neaktívny typ a typ iného objektu sú tiež neplatné.
+    assert (
+        client.post("/api/v1/employees", json={"surname": "X", "type": "inactive type"}).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/api/v1/employees", json={"surname": "X", "type": "other object type"}
+        ).status_code
+        == 422
+    )
+
+
+def test_type_validated_on_update(client: TestClient) -> None:
+    record = _create(client, surname="UpdType")
+    employee_id = record["id"]
+
+    ok = client.patch(f"/api/v1/employees/{employee_id}", json={"type": "visitor"})
+    assert ok.status_code == 200
+    assert ok.json()["type"] == "visitor"
+
+    bad = client.patch(f"/api/v1/employees/{employee_id}", json={"type": "neexistuje"})
+    assert bad.status_code == 422
 
 
 def test_rfid_gate_validated_on_create(client: TestClient) -> None:
@@ -54,43 +98,33 @@ def test_rfid_gate_validated_on_create(client: TestClient) -> None:
     assert record["rfid_littlegate"] == 0
 
 
-def test_list_filters_and_sorting(client: TestClient) -> None:
-    _create(client, surname="Zebra", forename="Anna", rfid_gate=1)
-    _create(client, surname="zebrak", forename="Bob", rfid_gate=0)
+def test_list_returns_all_active_sorted_no_pagination(client: TestClient) -> None:
+    a = _create(client, surname="Zebra", forename="Anna")
+    b = _create(client, surname="Aaron", forename="Bob")
 
-    response = client.get("/api/v1/employees", params={"surname": "zebra"})
-    assert response.status_code == 200
-    body = response.json()
+    # Filtračné query parametre sa ignorujú a nie je stránkovanie — vráti sa všetko.
+    body = client.get(
+        "/api/v1/employees", params={"surname": "nezmysel", "rfid_gate": 1, "page": 2}
+    ).json()
+    ids = [row["id"] for row in body["data"]]
     surnames = [row["surname"] for row in body["data"]]
-    assert surnames == sorted(surnames, key=str.lower)  # surname ASC
-    assert len(surnames) == 2
 
-    # rfid_gate=2 means "all", 1 filters
-    all_rows = client.get("/api/v1/employees", params={"surname": "zebra", "rfid_gate": 2})
-    assert len(all_rows.json()["data"]) == 2
-    gated = client.get("/api/v1/employees", params={"surname": "zebra", "rfid_gate": 1})
-    assert [r["surname"] for r in gated.json()["data"]] == ["Zebra"]
-
-    assert body["pagination"]["page"] == 1
+    assert "pagination" not in body  # žiadne stránkovanie
+    assert a["id"] in ids and b["id"] in ids  # filter aj page sa neuplatnili
+    assert surnames == sorted(surnames)  # zoradené podľa priezviska (SQLite binárne)
 
 
-def test_list_always_filters_active(client: TestClient, db_path: Path) -> None:
+def test_list_excludes_soft_deleted(client: TestClient, db_path: Path) -> None:
     record = _create(client, surname="SoonInactive")
     connection = sqlite3.connect(db_path)
     connection.execute("UPDATE er_reg_employees SET active = 0 WHERE id = ?", (record["id"],))
     connection.commit()
     connection.close()
 
-    response = client.get("/api/v1/employees", params={"surname": "SoonInactive"})
-    assert response.json()["data"] == []
+    listing = client.get("/api/v1/employees").json()
+    ids = [row["id"] for row in listing["data"]]
+    assert record["id"] not in ids  # zmazaný (active=0) sa v zozname nezobrazí
     assert client.get(f"/api/v1/employees/{record['id']}").status_code == 404
-
-
-def test_page_size_above_max_is_rejected(client: TestClient) -> None:
-    response = client.get("/api/v1/employees", params={"page_size": 999})
-    assert response.status_code == 422
-    # MAX_PAGE_SIZE is 50 in the test environment (see conftest.py).
-    assert "50" in response.json()["detail"]
 
 
 def test_get_missing_employee_returns_404(client: TestClient) -> None:

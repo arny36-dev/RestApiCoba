@@ -1,0 +1,38 @@
+# Production runtime dependencies (pinned to the versions this app is developed
+# and tested against). Install with: pip install --no-cache-dir -r requirements.txt
+#
+# NOTE ON THE srv_fastapi REFERENCE LOCK
+# --------------------------------------
+# The reference lock for srv_fastapi targets a *synchronous* stack (mariadb C
+# connector, FastAPI 0.103.1, Pydantic 2.3.0, Starlette 0.27.0). This project is
+# built on async SQLAlchemy 2.0 + aiomysql and imports `sqlalchemy` and
+# `aiomysql` at startup, so that lock cannot start the API (ModuleNotFoundError:
+# sqlalchemy). Per the "change only on concrete incompatibility" rule, the lock
+# below is adapted to the packages the code actually imports. Deviations:
+#   * ADDED   SQLAlchemy[asyncio], aiomysql, PyMySQL  — required to import/run.
+#   * BUMPED  fastapi/pydantic/starlette/uvicorn to the tested versions.
+#   * OMITTED mariadb (C connector) — replaced by pure-Python aiomysql.
+#   * OMITTED asyncpg — prod DB is MariaDB; see requirements-dev.txt to re-add
+#             PostgreSQL support.
+#   * OMITTED alembic — migration tooling, not needed to serve requests (and the
+#             DB-verification rules forbid running migrations); see dev lock.
+# The code has no 3.12-only syntax, so python:3.11.4-slim runs it unchanged.
+
+# --- Web framework / ASGI server ---
+fastapi==0.139.0
+starlette==1.3.1
+uvicorn[standard]==0.50.2
+
+# --- Validation / settings ---
+pydantic==2.13.4
+pydantic-settings==2.14.2
+
+# --- Async ORM + MariaDB/MySQL driver ---
+SQLAlchemy[asyncio]==2.0.51
+aiomysql==0.3.2
+PyMySQL==1.2.0
+
+# If the target MariaDB uses caching_sha2_password / ed25519 / sha256 auth,
+# PyMySQL additionally needs `cryptography`. Add it here (it ships manylinux
+# wheels, so no extra build step) if login fails with an auth-plugin error:
+# cryptography==44.0.0

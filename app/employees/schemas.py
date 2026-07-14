@@ -25,7 +25,7 @@ class EmployeeCreate(BaseModel):
     allowed_from: datetime | None = None
     allowed_to: datetime | None = None
     note: str | None = Field(None, max_length=200)
-    object_id: int | None = None
+    # object_id sa neprijíma od klienta — vždy sa nastaví na DEFAULT_OBJECT_ID (127).
 
 
 class EmployeeUpdate(BaseModel):
@@ -45,16 +45,8 @@ class EmployeeUpdate(BaseModel):
     note: str | None = Field(None, max_length=200)
 
 
-class PaginationMeta(BaseModel):
-    page: int
-    page_size: int
-    total: int
-    pages: int
-
-
 class EmployeeListResponse(BaseModel):
     data: list[dict[str, Any]]
-    pagination: PaginationMeta
 
 
 class EmployeeTypesResponse(BaseModel):

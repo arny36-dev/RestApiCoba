@@ -1,0 +1,28 @@
+# Production Compose file.
+#   docker compose up --build -d
+#
+# The API talks to an EXTERNAL MariaDB defined by DATABASE_URL in .env — no
+# database container is started here. The Docker host must be able to reach that
+# database host/port.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: restapicoba:latest
+    container_name: restapicoba
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

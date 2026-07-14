@@ -1,0 +1,15 @@
+# Development overrides. Applied explicitly on top of docker-compose.yml so the
+# default `docker compose up` stays production:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# This builds Dockerfile.dev (nano, ping, curl) and enables --reload with the
+# source bind-mounted so code changes take effect without a rebuild.
+services:
+  api:
+    build:
+      dockerfile: Dockerfile.dev
+    image: restapicoba:dev
+    container_name: restapicoba-dev
+    volumes:
+      - ./app:/app/app

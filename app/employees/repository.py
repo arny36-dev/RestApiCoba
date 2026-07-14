@@ -32,27 +32,23 @@ def _apply_where(statement: Any, conditions: Sequence[ColumnElement[bool]]) -> A
     return statement
 
 
-async def count_employees(
-    session: AsyncSession, table: Table, conditions: Sequence[ColumnElement[bool]]
-) -> int:
-    statement = _apply_where(select(func.count()).select_from(table), conditions)
-    return (await session.execute(statement)).scalar_one()
-
-
 async def list_employees(
     session: AsyncSession,
     table: Table,
     conditions: Sequence[ColumnElement[bool]],
     *,
-    limit: int,
-    offset: int,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
-    statement = (
-        _apply_where(select(table), conditions)
-        .order_by(table.c.surname.asc(), table.c.forename.asc())
-        .limit(limit)
-        .offset(offset)
+    statement = _apply_where(select(table), conditions).order_by(
+        # ``id`` is the final tiebreaker so ordering is deterministic even when
+        # two rows share the same surname and forename.
+        table.c.surname.asc(),
+        table.c.forename.asc(),
+        table.c.id.asc(),
     )
+    if limit is not None:
+        statement = statement.limit(limit).offset(offset)
     result = await session.execute(statement)
     return [dict(row) for row in result.mappings()]
 
@@ -86,6 +82,14 @@ async def update_employees(
     statement = _apply_where(update(table), conditions).values(values)
     result = await session.execute(statement)
     return result.rowcount
+
+
+async def employee_type_exists(
+    session: AsyncSession, table: Table, conditions: Sequence[ColumnElement[bool]]
+) -> bool:
+    """Return True if at least one employee type matches the conditions."""
+    statement = _apply_where(select(func.count()).select_from(table), conditions)
+    return (await session.execute(statement)).scalar_one() > 0
 
 
 async def list_employee_types(

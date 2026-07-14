@@ -1,0 +1,52 @@
+# Keep the build context (and the final image) minimal and secret-free.
+
+# Version control
+.git
+.gitignore
+
+# Virtual environments
+.venv
+venv
+
+# Python caches / build artifacts
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+dist
+build
+
+# Tooling caches
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+
+# Tests (not shipped in the production image)
+tests
+
+# Secrets & local config (provided at runtime via env_file, never baked in)
+.env
+.env.example
+
+# Logs & local databases
+logs
+*.log
+*.db
+*.sqlite3
+
+# Migrations config (run manually, not needed in the runtime image)
+alembic.ini
+
+# Docker & docs
+Dockerfile*
+docker-compose*
+.dockerignore
+*.md
+
+# Editors / OS
+.idea
+.vscode
+.DS_Store
+Thumbs.db

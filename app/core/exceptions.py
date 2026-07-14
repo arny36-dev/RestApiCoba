@@ -15,6 +15,12 @@ class AppError(Exception):
         self.detail = detail
 
 
+class AuthenticationError(AppError):
+    """Missing or incorrect API key."""
+
+    status_code = 401
+
+
 class RecordNotFoundError(AppError):
     """No matching record for the given identifier."""
 
